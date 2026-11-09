@@ -1,0 +1,114 @@
+[
+  {
+    "name": "create",
+    "url": "/api/core/admins",
+    "method": "POST",
+    "model": "users",
+    "screen": "admins"
+  },
+  {
+    "name": "update",
+    "url": "/api/core/admins/:id",
+    "method": "PUT",
+    "model": "users",
+    "screen": "admins"
+  },
+  {
+    "name": "getAll",
+    "url": "/api/core/admins",
+    "method": "GET",
+    "model": "users",
+    "screen": "admins"
+  },
+  {
+    "name": "getOne",
+    "url": "/api/core/admins/:id/view",
+    "method": "GET",
+    "model": "users",
+    "screen": "admins"
+  },
+  {
+    "name": "delete",
+    "url": "/api/core/admins/:id",
+    "method": "DELETE",
+    "model": "users",
+    "screen": "admins"
+  },
+  {
+    "name": "getAll",
+    "url": "/api/core/roles",
+    "method": "GET",
+    "model": "users",
+    "screen": "roles"
+  },
+  {
+    "name": "create",
+    "url": "/api/core/roles",
+    "method": "POST",
+    "model": "users",
+    "screen": "roles"
+  },
+  {
+    "name": "update",
+    "url": "/api/core/roles/:id",
+    "method": "PUT",
+    "model": "users",
+    "screen": "roles"
+  },
+  {
+    "name": "getOne",
+    "url": "/api/core/roles/:id/view",
+    "method": "GET",
+    "model": "users",
+    "screen": "roles"
+  },
+  {
+    "name": "delete",
+    "url": "/api/core/roles/:id",
+    "method": "DELETE",
+    "model": "users",
+    "screen": "roles"
+  },
+  {
+    "name": "getAllPermissions",
+    "url": "/api/core/permissions",
+    "method": "GET",
+    "model": "users",
+    "screen": "roles"
+  },
+  {
+    "name": "create",
+    "url": "/api/core/companies",
+    "method": "POST",
+    "model": "core",
+    "screen": "companies"
+  },
+  {
+    "name": "update",
+    "url": "/api/core/companies/:id",
+    "method": "PUT",
+    "model": "core",
+    "screen": "companies"
+  },
+  {
+    "name": "getAll",
+    "url": "/api/core/companies",
+    "method": "GET",
+    "model": "core",
+    "screen": "companies"
+  },
+  {
+    "name": "getOne",
+    "url": "/api/core/companies/:id/view",
+    "method": "GET",
+    "model": "core",
+    "screen": "companies"
+  },
+  {
+    "name": "delete",
+    "url": "/api/core/companies/:id",
+    "method": "DELETE",
+    "model": "core",
+    "screen": "companies"
+  }
+]
