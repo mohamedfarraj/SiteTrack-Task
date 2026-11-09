@@ -1,84 +1,78 @@
-import {
-  ExceptionFilter,
-  Catch,
-  ArgumentsHost,
-  HttpException,
-  HttpStatus,
-  Logger,
-} from '@nestjs/common';
+import { ArgumentsHost, Catch, ExceptionFilter, HttpException, HttpStatus, Logger } from '@nestjs/common';
 import { Request, Response } from 'express';
 
-@Catch(HttpException)
-export class HttpExceptionFilter implements ExceptionFilter {
-  private readonly logger = new Logger(HttpExceptionFilter.name);
+/** Postgres error codes we translate into client errors. */
+const PG_ERRORS: Record<string, { status: HttpStatus; message: string }> = {
+  '23505': { status: HttpStatus.CONFLICT, message: 'A record with the same unique value already exists' },
+  '23503': { status: HttpStatus.CONFLICT, message: 'The record is referenced by, or references, other data' },
+  '23514': { status: HttpStatus.CONFLICT, message: 'The change would violate a data rule' },
+  '22P02': { status: HttpStatus.BAD_REQUEST, message: 'Invalid input value' },
+  '22008': { status: HttpStatus.BAD_REQUEST, message: 'Invalid date' },
+  '22003': { status: HttpStatus.BAD_REQUEST, message: 'Numeric value out of range' },
+  '40P01': { status: HttpStatus.CONFLICT, message: 'Concurrent update, please retry' },
+};
 
-  catch(exception: HttpException, host: ArgumentsHost) {
+/**
+ * Converts every error into one consistent JSON shape:
+ *
+ *   { statusCode, error, message, details?, path, method, timestamp, requestId }
+ *
+ * Unknown errors become a generic 500 so internals (SQL, stack traces) never
+ * leak to clients; the full error is still logged with the request id.
+ */
+@Catch()
+export class AllExceptionsFilter implements ExceptionFilter {
+  private readonly logger = new Logger('Exceptions');
+
+  catch(exception: unknown, host: ArgumentsHost): void {
     const ctx = host.switchToHttp();
     const response = ctx.getResponse<Response>();
     const request = ctx.getRequest<Request>();
-    const status = exception.getStatus();
-    const exceptionResponse = exception.getResponse();
-    const requestId = request.headers['x-request-id'] || 'unknown';
+    const requestId = (request.headers['x-request-id'] as string) ?? 'unknown';
 
-    let message: string | string[] = 'An error occurred';
-    let error = exception.name;
+    let status = HttpStatus.INTERNAL_SERVER_ERROR;
+    let message = 'Internal server error';
+    let details: string[] | undefined;
 
-    if (typeof exceptionResponse === 'object' && exceptionResponse !== null) {
-      const res = exceptionResponse as {
-        statusCode?: number;
-        message?: string | string[];
-        error?: string;
-      };
-
-      if (res.message) {
-        message = Array.isArray(res.message) ? res.message[0] : res.message;
-      }
-
-      if (res.error) {
-        error = res.error;
-      }
-
-      // Handle validation errors
-      if (res.statusCode === HttpStatus.BAD_REQUEST) {
-        if (Array.isArray(res.message)) {
-          message = res.message[0];
+    if (exception instanceof HttpException) {
+      status = exception.getStatus();
+      const body = exception.getResponse();
+      if (typeof body === 'string') {
+        message = body;
+      } else if (body && typeof body === 'object') {
+        const raw = (body as { message?: string | string[] }).message;
+        if (Array.isArray(raw)) {
+          // class-validator returns a list; expose all of them.
+          details = raw;
+          message = raw[0] ?? 'Validation failed';
+        } else if (raw) {
+          message = raw;
         }
       }
-
-      // Handle unauthorized errors
-      if (res.statusCode === HttpStatus.UNAUTHORIZED) {
-        message = 'Unauthorized access. Please provide valid credentials.';
-      }
-
-      // Handle forbidden errors
-      if (res.statusCode === HttpStatus.FORBIDDEN) {
-        message = 'Access forbidden. You do not have permission to perform this action.';
-      }
-
-      // Handle not found errors
-      if (res.statusCode === HttpStatus.NOT_FOUND) {
-        message = 'Resource not found.';
-      }
-    } else if (typeof exceptionResponse === 'string') {
-      message = exceptionResponse;
+    } else if (isPgError(exception) && PG_ERRORS[exception.code]) {
+      ({ status, message } = PG_ERRORS[exception.code]);
     }
 
-    // Log error
-    this.logger.error(
-      `HTTP ${status} Error: ${message} - Request ID: ${requestId} - Path: ${request.url}`,
-      exception.stack,
-    );
+    if (status >= 500) {
+      this.logger.error(
+        `${request.method} ${request.url} [${requestId}]`,
+        exception instanceof Error ? exception.stack : String(exception),
+      );
+    }
 
-    const errorResponse = {
+    response.status(status).json({
       statusCode: status,
-      timestamp: new Date().toISOString(),
+      error: HttpStatus[status] ?? 'Error',
+      message,
+      ...(details && details.length > 1 ? { details } : {}),
       path: request.url,
       method: request.method,
-      message,
-      error,
+      timestamp: new Date().toISOString(),
       requestId,
-    };
-
-    response.status(status).json(errorResponse);
+    });
   }
+}
+
+function isPgError(err: unknown): err is { code: string } {
+  return typeof err === 'object' && err !== null && typeof (err as { code?: unknown }).code === 'string';
 }

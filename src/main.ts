@@ -1,167 +1,75 @@
-import { NestFactory } from '@nestjs/core';
-import { AppModule } from './app.module';
+import { Logger, ValidationPipe, VersioningType } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
-import { SwaggerModule, DocumentBuilder } from '@nestjs/swagger';
+import { NestFactory } from '@nestjs/core';
+import { DocumentBuilder, SwaggerModule } from '@nestjs/swagger';
+import compression from 'compression';
+import helmet from 'helmet';
+import { AppModule } from './app.module';
+import { AllExceptionsFilter } from './common/filters/http-exception.filter';
 import { TransformInterceptor } from './common/interceptors/transform.interceptor';
-import { HttpExceptionFilter } from './common/filters/http-exception.filter';
-import { LoggerService } from './common/shared/logger.service';
-import { ValidationPipe, VersioningType } from '@nestjs/common';
-import * as cookieParser from 'cookie-parser';
-import * as compression from 'compression';
-import * as helmet from 'helmet';
-import { GlobalPrefix } from './common/shared/constants';
-import { join } from 'path';
-import * as express from 'express';
+import { AppConfig } from './config/app.config';
 
-async function bootstrap() {
-  const app = await NestFactory.create(AppModule, {
-    bufferLogs: true,
-  });
-  const configService = app.get(ConfigService);
-  const logger = new LoggerService();
+export const API_PREFIX = 'api';
 
-  // Use custom logger
-  app.useLogger(logger);
+async function bootstrap(): Promise<void> {
+  const app = await NestFactory.create(AppModule);
+  const config = app.get(ConfigService).getOrThrow<AppConfig>('app');
+  const logger = new Logger('Bootstrap');
 
-  // Get port from config
-  const port = configService.get<number>('app.port') || 3000;
-  const nodeEnv = configService.get<string>('app.nodeEnv') || 'development';
-
-  // Security: Helmet for HTTP headers
-  app.use(
-    helmet({
-      contentSecurityPolicy: nodeEnv === 'production',
-      crossOriginEmbedderPolicy: nodeEnv === 'production',
-    }),
-  );
-
-  // Enable CORS with better configuration
-  const corsOrigin = configService.get<string>('app.cors_origin') || '*';
+  // Security headers. Swagger UI needs inline scripts, so CSP is relaxed only in dev.
+  app.use(helmet({ contentSecurityPolicy: config.nodeEnv === 'production' ? undefined : false }));
+  app.use(compression());
   app.enableCors({
-    origin: corsOrigin === '*' ? true : corsOrigin.split(','),
-    credentials: true,
+    origin: config.corsOrigin === '*' ? true : config.corsOrigin.split(','),
     methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
     allowedHeaders: ['Content-Type', 'Authorization', 'X-Request-ID'],
     exposedHeaders: ['X-Request-ID'],
   });
 
-  // Static files
-  app.use('/uploads', express.static(join(process.cwd(), '/uploads/')));
+  // All routes live under /api/v1/...
+  app.setGlobalPrefix(API_PREFIX, { exclude: ['health'] });
+  app.enableVersioning({ type: VersioningType.URI, defaultVersion: '1' });
 
-  // Set global prefix for API
-  app.setGlobalPrefix(GlobalPrefix);
-
-  // Enable API versioning
-  app.enableVersioning({
-    type: VersioningType.URI,
-    defaultVersion: '1',
-  });
-
-  // Cookie parser
-  app.use(cookieParser());
-
-  // Compression
-  app.use(
-    compression({
-      filter: (req: express.Request, res: express.Response) => {
-        if (req.headers['x-no-compression']) {
-          return false;
-        }
-        return compression.filter(req, res);
-      },
-      level: 6,
-    }),
-  );
-
-  // Enhanced ValidationPipe with better options
+  // DTO validation: strip unknown fields, reject unexpected ones, convert types.
   app.useGlobalPipes(
     new ValidationPipe({
       whitelist: true,
       forbidNonWhitelisted: true,
       transform: true,
-      transformOptions: {
-        enableImplicitConversion: true,
-      },
-      disableErrorMessages: nodeEnv === 'production',
-      validateCustomDecorators: true,
+      transformOptions: { enableImplicitConversion: true },
     }),
   );
-
-  // Set global interceptor
   app.useGlobalInterceptors(new TransformInterceptor());
+  app.useGlobalFilters(new AllExceptionsFilter());
 
-  // Set global Filters
-  app.useGlobalFilters(new HttpExceptionFilter());
+  // OpenAPI docs: the contract for the frontend team (also served in production).
+  const swagger = new DocumentBuilder()
+    .setTitle('SiteTrack API')
+    .setDescription(
+      [
+        'Construction projects, tasks, dependencies, stores and material deliveries.',
+        '',
+        '**Auth:** call `POST /api/v1/auth/login`, then send `Authorization: Bearer <accessToken>`.',
+        'When a request answers 401, call `POST /api/v1/auth/refresh` with the refresh token and retry.',
+        '',
+        '**Envelope:** success = `{ data, requestId }`; lists = `data: { items, meta }`;',
+        'errors = `{ statusCode, error, message, details?, requestId }`.',
+      ].join('\n'),
+    )
+    .setVersion('1.0')
+    .addBearerAuth()
+    .build();
+  SwaggerModule.setup('docs', app, () => SwaggerModule.createDocument(app, swagger), {
+    jsonDocumentUrl: 'docs/openapi.json',
+    swaggerOptions: { persistAuthorization: true },
+  });
 
-  // Swagger setup with better configuration
-  if (nodeEnv !== 'production') {
-    const swaggerConfig = new DocumentBuilder()
-      .setTitle('NestJS Best Structure API')
-      .setDescription(
-        'A powerful and scalable backend system built with NestJS. This API provides comprehensive endpoints for managing the application.',
-      )
-      .setVersion('1.0')
-      .addBearerAuth(
-        {
-          type: 'http',
-          scheme: 'bearer',
-          bearerFormat: 'JWT',
-          name: 'JWT',
-          description: 'Enter JWT token',
-          in: 'header',
-        },
-        'JWT-auth',
-      )
-      .addTag('Authentication', 'Authentication related endpoints')
-      .addTag('Core', 'Core module endpoints')
-      .addTag('System', 'System module endpoints')
-      .addServer(`http://localhost:${port}`, 'Development server')
-      .addServer('https://api.example.com', 'Production server')
-      .setContact('Mohamed Farraj', '', 'mohamedfarraj@example.com')
-      .setLicense('MIT', 'https://opensource.org/licenses/MIT')
-      .build();
-
-    const document = SwaggerModule.createDocument(app, swaggerConfig, {
-      operationIdFactory: (controllerKey: string, methodKey: string) => methodKey,
-    });
-    SwaggerModule.setup('api/docs', app, document, {
-      swaggerOptions: {
-        persistAuthorization: true,
-        tagsSorter: 'alpha',
-        operationsSorter: 'alpha',
-      },
-      customSiteTitle: 'NestJS API Documentation',
-      customfavIcon: '/favicon.ico',
-      customCss: '.swagger-ui .topbar { display: none }',
-    });
-
-    logger.log(`Swagger documentation available at: http://localhost:${port}/api/docs`);
-  }
-
-  // Graceful shutdown
   app.enableShutdownHooks();
-
-  await app.listen(port);
-
-  logger.log(`🚀 Application is running on: ${await app.getUrl()}`);
-  logger.log(`📝 Environment: ${nodeEnv}`);
-  logger.log(`🌍 API prefix: /${GlobalPrefix}`);
-
-  // Handle graceful shutdown
-  process.on('SIGTERM', async () => {
-    logger.log('SIGTERM signal received: closing HTTP server');
-    await app.close();
-    process.exit(0);
-  });
-
-  process.on('SIGINT', async () => {
-    logger.log('SIGINT signal received: closing HTTP server');
-    await app.close();
-    process.exit(0);
-  });
+  await app.listen(config.port, '0.0.0.0');
+  logger.log(`SiteTrack API listening on port ${config.port} (docs at /docs)`);
 }
 
-bootstrap().catch((error) => {
-  console.error('Error starting the application:', error);
+bootstrap().catch((err) => {
+  console.error('Failed to start SiteTrack API', err);
   process.exit(1);
 });

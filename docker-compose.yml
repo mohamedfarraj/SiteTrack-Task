@@ -1,39 +1,69 @@
-name: real_estate_crm
+# `docker compose up` starts Postgres and the API, ready to use.
+# Load the large demo data set with:  docker compose exec api npm run seed
+name: sitetrack
+
 services:
-  webApp:
-    image: node:20 # Use the official Node.js 20 image
+  db:
+    image: postgres:17-alpine
+    # Docker's default /dev/shm (64MB) is too small for parallel queries.
+    shm_size: 512mb
+    environment:
+      POSTGRES_DB: sitetrack
+      POSTGRES_USER: sitetrack
+      POSTGRES_PASSWORD: sitetrack
+    # Tuned for a single small server shared with the API.
+    command:
+      - postgres
+      - -c
+      - shared_buffers=256MB
+      - -c
+      - effective_cache_size=768MB
+      - -c
+      - work_mem=16MB
+      - -c
+      - maintenance_work_mem=256MB
+      - -c
+      - random_page_cost=1.1
+      - -c
+      - max_wal_size=2GB
     volumes:
-      - .:/app
-    working_dir: /app
+      - db_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U sitetrack -d sitetrack"]
+      interval: 3s
+      timeout: 3s
+      retries: 20
+
+  api:
+    build: .
+    environment:
+      PORT: 3000
+      NODE_ENV: production
+      DB_HOST: db
+      DB_PORT: 5432
+      DB_NAME: sitetrack
+      DB_USER: sitetrack
+      DB_PASSWORD: sitetrack
+      DB_MIGRATE_ON_START: "true"
+      # Change this outside local/demo use.
+      JWT_SECRET: ${JWT_SECRET:-local-dev-secret-change-me}
+      JWT_ACCESS_TTL: 15m
+      REFRESH_TTL_DAYS: 30
+      # Per-IP limits on register/login/refresh (brute-force protection).
+      THROTTLE_AUTH_LIMIT: ${THROTTLE_AUTH_LIMIT:-60}
+      THROTTLE_LIMIT: ${THROTTLE_LIMIT:-3000}
     ports:
       - "3000:3000"
-    command: >
-      sh -c "npm install -g @nestjs/cli && npm install && npm run start:dev"
     depends_on:
-      - db
-
-  db:
-    image: mysql:8.0
-    environment:
-      MYSQL_ROOT_PASSWORD: rootpassword
-      MYSQL_DATABASE: home
-      MYSQL_USER: user
-      MYSQL_PASSWORD: 123456
-    command: --default-authentication-plugin=mysql_native_password
-    volumes:
-      - db_data:/var/lib/mysql
-    ports:
-      - "3306:3306"
-
-  phpmyadmin:
-    image: phpmyadmin
-    environment:
-      PMA_HOST: db
-      MYSQL_ROOT_PASSWORD: rootpassword
-    ports:
-      - "6060:80"
-    depends_on:
-      - db
+      db:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:3000/health || exit 1"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
 
 volumes:
   db_data:

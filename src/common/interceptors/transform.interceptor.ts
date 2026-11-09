@@ -1,30 +1,20 @@
-import {
-  Injectable,
-  NestInterceptor,
-  ExecutionContext,
-  CallHandler,
-} from '@nestjs/common';
+import { CallHandler, ExecutionContext, Injectable, NestInterceptor } from '@nestjs/common';
+import { Request } from 'express';
 import { Observable } from 'rxjs';
 import { map } from 'rxjs/operators';
-import { Request } from 'express';
 
+/**
+ * Wraps every successful response in a stable envelope:
+ *
+ *   { data: <handler result>, requestId }
+ *
+ * List endpoints return `{ items, meta }` inside `data`.
+ */
 @Injectable()
-export class TransformInterceptor<T> implements NestInterceptor<T, any> {
-  intercept(context: ExecutionContext, next: CallHandler): Observable<any> {
+export class TransformInterceptor implements NestInterceptor {
+  intercept(context: ExecutionContext, next: CallHandler): Observable<unknown> {
     const request = context.switchToHttp().getRequest<Request>();
-    const response = context.switchToHttp().getResponse();
-    const requestId = request.headers['x-request-id'] || 'unknown';
-
-    return next.handle().pipe(
-      map((data) => {
-        // Transform the response data here
-        return {
-          data,
-          statusCode: response.statusCode,
-          timestamp: new Date().toISOString(),
-          requestId,
-        };
-      }),
-    );
+    const requestId = request.headers['x-request-id'] ?? 'unknown';
+    return next.handle().pipe(map((data) => ({ data: data ?? null, requestId })));
   }
 }
